@@ -554,6 +554,19 @@ func (s *store) AddOrUpdatePod(pod *corev1.Pod, modelServers []*aiv1alpha1.Model
 		}
 	}
 
+	if oldPodInfo != nil {
+		oldPodInfo.mutex.RLock()
+		newPodInfo.GPUCacheUsage = oldPodInfo.GPUCacheUsage
+		newPodInfo.RequestWaitingNum = oldPodInfo.RequestWaitingNum
+		newPodInfo.RequestRunningNum = oldPodInfo.RequestRunningNum
+		newPodInfo.TPOT = oldPodInfo.TPOT
+		newPodInfo.TTFT = oldPodInfo.TTFT
+		newPodInfo.TimeToFirstToken = oldPodInfo.TimeToFirstToken
+		newPodInfo.TimePerOutputToken = oldPodInfo.TimePerOutputToken
+		newPodInfo.models = oldPodInfo.models.Copy()
+		oldPodInfo.mutex.RUnlock()
+	}
+
 	s.pods.Store(podName, newPodInfo)
 
 	if oldPodInfo == nil {

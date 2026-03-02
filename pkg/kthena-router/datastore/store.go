@@ -519,17 +519,14 @@ func (s *store) GetPrefillPodsForDecodeGroup(modelServerName types.NamespacedNam
 
 func (s *store) AddOrUpdatePod(pod *corev1.Pod, modelServers []*aiv1alpha1.ModelServer) error {
 	podName := utils.GetNamespaceName(pod)
-	newPodInfo := &PodInfo{
-		Pod:         pod,
-		modelServer: sets.Set[types.NamespacedName]{},
-		models:      sets.New[string](),
-	}
 
+	newModelServers := sets.New[types.NamespacedName]()
+	var engine string
 	for _, ms := range modelServers {
 		modelServerName := utils.GetNamespaceName(ms)
-		newPodInfo.AddModelServer(modelServerName)
+		newModelServers.Insert(modelServerName)
 		// NOTE: even if a pod belongs to multiple model servers, the backend should be the same
-		newPodInfo.engine = string(ms.Spec.InferenceEngine)
+		engine = string(ms.Spec.InferenceEngine)
 		if value, ok := s.modelServer.Load(modelServerName); ok {
 			ms := value.(*modelServer)
 			ms.addPod(podName)
@@ -539,12 +536,12 @@ func (s *store) AddOrUpdatePod(pod *corev1.Pod, modelServers []*aiv1alpha1.Model
 		}
 	}
 
-	var oldPodInfo *PodInfo
 	if value, ok := s.pods.Load(podName); ok {
-		oldPodInfo = value.(*PodInfo)
+		// Update existing pod in place — preserve runtime metrics and models.
+		oldPodInfo := value.(*PodInfo)
 		oldModelServers := oldPodInfo.GetModelServers()
-		// Handle the case where the pod is no longer belong to some model servers
-		for msName := range oldModelServers.Difference(newPodInfo.modelServer) {
+		// Handle the case where the pod no longer belongs to some model servers
+		for msName := range oldModelServers.Difference(newModelServers) {
 			if value, ok := s.modelServer.Load(msName); ok {
 				ms := value.(*modelServer)
 				ms.deletePod(podName)
@@ -552,27 +549,25 @@ func (s *store) AddOrUpdatePod(pod *corev1.Pod, modelServers []*aiv1alpha1.Model
 				ms.removePodFromPDGroups(podName, oldPodInfo.Pod.Labels)
 			}
 		}
+
+		oldPodInfo.mutex.Lock()
+		oldPodInfo.Pod = pod
+		oldPodInfo.engine = engine
+		oldPodInfo.modelServer = newModelServers
+		oldPodInfo.mutex.Unlock()
+		return nil
 	}
 
-	if oldPodInfo != nil {
-		oldPodInfo.mutex.RLock()
-		newPodInfo.GPUCacheUsage = oldPodInfo.GPUCacheUsage
-		newPodInfo.RequestWaitingNum = oldPodInfo.RequestWaitingNum
-		newPodInfo.RequestRunningNum = oldPodInfo.RequestRunningNum
-		newPodInfo.TPOT = oldPodInfo.TPOT
-		newPodInfo.TTFT = oldPodInfo.TTFT
-		newPodInfo.TimeToFirstToken = oldPodInfo.TimeToFirstToken
-		newPodInfo.TimePerOutputToken = oldPodInfo.TimePerOutputToken
-		newPodInfo.models = oldPodInfo.models.Copy()
-		oldPodInfo.mutex.RUnlock()
+	// New pod — create PodInfo and fetch initial metrics.
+	newPodInfo := &PodInfo{
+		Pod:         pod,
+		engine:      engine,
+		modelServer: newModelServers,
+		models:      sets.New[string](),
 	}
-
 	s.pods.Store(podName, newPodInfo)
-
-	if oldPodInfo == nil {
-		s.updatePodMetrics(newPodInfo)
-		s.updatePodModels(newPodInfo)
-	}
+	s.updatePodMetrics(newPodInfo)
+	s.updatePodModels(newPodInfo)
 
 	return nil
 }

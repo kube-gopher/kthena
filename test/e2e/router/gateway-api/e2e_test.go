@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,6 +41,8 @@ var (
 	testNamespace   string
 	kthenaNamespace string
 )
+
+const testDataDir = "test/e2e/router/testdata"
 
 // TestMain runs setup and cleanup for all tests in this package.
 func TestMain(m *testing.M) {
@@ -161,7 +164,7 @@ func TestDuplicateModelName(t *testing.T) {
 
 	// 1. Deploy ModelRouteSimple.yaml with parentRefs to default Gateway
 	t.Log("Deploying ModelRouteSimple binding to default Gateway...")
-	modelRoute1 := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteSimple.yaml")
+	modelRoute1 := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRouteSimple.yaml"))
 	modelRoute1.Namespace = testNamespace
 	modelRoute1.Name = "deepseek-simple-default"
 
@@ -190,7 +193,7 @@ func TestDuplicateModelName(t *testing.T) {
 
 	// 2. Create custom Gateway with port 8081
 	t.Log("Creating custom Gateway with port 8081...")
-	customGateway := utils.LoadYAMLFromFile[gatewayv1.Gateway]("examples/kthena-router/Gateway.yaml")
+	customGateway := utils.LoadYAMLFromFile[gatewayv1.Gateway](filepath.Join(testDataDir, "Gateway.yaml"))
 	customGateway.Namespace = kthenaNamespace
 	customGateway.Name = "kthena-gateway-custom"
 	customGateway.Spec.Listeners[0].Port = gatewayv1.PortNumber(8081)

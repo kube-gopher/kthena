@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -37,6 +38,8 @@ var (
 	testNamespace   string
 	kthenaNamespace string
 )
+
+const testDataDir = "test/e2e/router/testdata"
 
 func TestMain(m *testing.M) {
 	testNamespace = "kthena-e2e-gie-" + utils.RandomString(5)
@@ -95,7 +98,7 @@ func TestGatewayInferenceExtension(t *testing.T) {
 
 	// 1. Deploy InferencePool
 	t.Log("Deploying InferencePool...")
-	inferencePool := utils.LoadYAMLFromFile[inferencev1.InferencePool]("examples/kthena-router/InferencePool.yaml")
+	inferencePool := utils.LoadYAMLFromFile[inferencev1.InferencePool](filepath.Join(testDataDir, "InferencePool.yaml"))
 	inferencePool.Namespace = testNamespace
 
 	createdInferencePool, err := testCtx.InferenceClient.InferenceV1().InferencePools(testNamespace).Create(ctx, inferencePool, metav1.CreateOptions{})
@@ -109,7 +112,7 @@ func TestGatewayInferenceExtension(t *testing.T) {
 
 	// 2. Deploy HTTPRoute
 	t.Log("Deploying HTTPRoute...")
-	httpRoute := utils.LoadYAMLFromFile[gatewayv1.HTTPRoute]("examples/kthena-router/HTTPRoute.yaml")
+	httpRoute := utils.LoadYAMLFromFile[gatewayv1.HTTPRoute](filepath.Join(testDataDir, "HTTPRoute.yaml"))
 	httpRoute.Namespace = testNamespace
 
 	// Update parentRefs to point to the kthena installation namespace
@@ -145,7 +148,7 @@ func TestBothAPIsConfigured(t *testing.T) {
 
 	// 1. Deploy ModelRoute and ModelServer for ModelRoute/ModelServer API
 	t.Log("Deploying ModelRoute...")
-	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRoute-binding-gateway.yaml")
+	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRoute-binding-gateway.yaml"))
 	modelRoute.Namespace = testNamespace
 
 	// Update parentRefs to point to the kthena installation namespace
@@ -203,7 +206,7 @@ func TestBothAPIsConfigured(t *testing.T) {
 
 	// 3. Deploy HTTPRoute pointing to the 7b InferencePool
 	t.Log("Deploying HTTPRoute...")
-	httpRoute := utils.LoadYAMLFromFile[gatewayv1.HTTPRoute]("examples/kthena-router/HTTPRoute.yaml")
+	httpRoute := utils.LoadYAMLFromFile[gatewayv1.HTTPRoute](filepath.Join(testDataDir, "HTTPRoute.yaml"))
 	httpRoute.Namespace = testNamespace
 	httpRoute.Name = "llm-route-7b"
 

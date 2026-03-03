@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +52,7 @@ const (
 	defaultMetricsURL      = "http://127.0.0.1:8080/metrics"
 	defaultPollingInterval = 2 * time.Second
 	defaultScalingTimeout  = 3 * time.Minute
+	testDataDir            = "test/e2e/router/testdata"
 )
 
 func getCounterValue(metrics map[string]*dto.MetricFamily, metricName string, labels map[string]string) float64 {
@@ -127,7 +129,7 @@ func ensureRedis(t *testing.T, kubeClient kubernetes.Interface, namespace string
 	dynamicClient, err := dynamic.NewForConfig(config)
 	require.NoError(t, err, "Failed to create dynamic client")
 
-	const redisManifestPath = "examples/redis/redis-standalone.yaml"
+	redisManifestPath := filepath.Join(testDataDir, "redis-standalone.yaml")
 
 	redisObjects := utils.LoadUnstructuredYAMLFromFile(redisManifestPath)
 	require.NotEmpty(t, redisObjects, "Redis manifest is empty")
@@ -292,7 +294,7 @@ func TestModelRouteSimpleShared(t *testing.T, testCtx *routercontext.RouterTestC
 
 	// Deploy ModelRoute
 	t.Log("Deploying ModelRoute...")
-	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteSimple.yaml")
+	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRouteSimple.yaml"))
 	modelRoute.Namespace = testNamespace
 
 	// Configure ParentRefs if using Gateway API
@@ -325,7 +327,7 @@ func TestModelRouteSimpleShared(t *testing.T, testCtx *routercontext.RouterTestC
 func TestModelRouteMultiModelsShared(t *testing.T, testCtx *routercontext.RouterTestContext, testNamespace string, useGatewayAPI bool, kthenaNamespace string) {
 	ctx := context.Background()
 
-	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteMultiModels.yaml")
+	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRouteMultiModels.yaml"))
 	modelRoute.Namespace = testNamespace
 
 	// Configure ParentRefs if using Gateway API
@@ -396,7 +398,7 @@ func TestModelRoutePrefillDecodeDisaggregationShared(t *testing.T, testCtx *rout
 
 	// Deploy ModelServing
 	t.Log("Deploying ModelServing for PD disaggregation...")
-	modelServing := utils.LoadYAMLFromFile[workloadv1alpha1.ModelServing]("examples/kthena-router/ModelServing-ds1.5b-pd-disaggregation.yaml")
+	modelServing := utils.LoadYAMLFromFile[workloadv1alpha1.ModelServing](filepath.Join(testDataDir, "ModelServing-ds1.5b-pd-disaggregation.yaml"))
 	modelServing.Namespace = testNamespace
 	createdModelServing, err := testCtx.KthenaClient.WorkloadV1alpha1().ModelServings(testNamespace).Create(ctx, modelServing, metav1.CreateOptions{})
 	require.NoError(t, err, "Failed to create ModelServing")
@@ -417,7 +419,7 @@ func TestModelRoutePrefillDecodeDisaggregationShared(t *testing.T, testCtx *rout
 
 	// Deploy ModelServer
 	t.Log("Deploying ModelServer for PD disaggregation...")
-	modelServer := utils.LoadYAMLFromFile[networkingv1alpha1.ModelServer]("examples/kthena-router/ModelServer-ds1.5b-pd-disaggregation.yaml")
+	modelServer := utils.LoadYAMLFromFile[networkingv1alpha1.ModelServer](filepath.Join(testDataDir, "ModelServer-ds1.5b-pd-disaggregation.yaml"))
 	modelServer.Namespace = testNamespace
 	createdModelServer, err := testCtx.KthenaClient.NetworkingV1alpha1().ModelServers(testNamespace).Create(ctx, modelServer, metav1.CreateOptions{})
 	require.NoError(t, err, "Failed to create ModelServer")
@@ -435,7 +437,7 @@ func TestModelRoutePrefillDecodeDisaggregationShared(t *testing.T, testCtx *rout
 
 	// Deploy ModelRoute
 	t.Log("Deploying ModelRoute for PD disaggregation...")
-	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRoute-ds1.5b-pd-disaggregation.yaml")
+	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRoute-ds1.5b-pd-disaggregation.yaml"))
 	modelRoute.Namespace = testNamespace
 
 	// Configure ParentRefs if using Gateway API
@@ -472,7 +474,7 @@ func TestModelRouteSubsetShared(t *testing.T, testCtx *routercontext.RouterTestC
 	t.Log("Deploying Canary ModelServers and LLM-Mock deployments...")
 
 	// Deploy Canary LLM-Mock deployments from YAML file
-	canaryDeployments := utils.LoadMultiResourceYAMLFromFile[appsv1.Deployment]("examples/kthena-router/LLM-Mock-ds1.5b-Canary.yaml")
+	canaryDeployments := utils.LoadMultiResourceYAMLFromFile[appsv1.Deployment](filepath.Join(testDataDir, "LLM-Mock-ds1.5b-Canary.yaml"))
 	require.Len(t, canaryDeployments, 2, "Canary YAML should contain 2 deployments")
 
 	deploymentV1 := canaryDeployments[0]
@@ -500,7 +502,7 @@ func TestModelRouteSubsetShared(t *testing.T, testCtx *routercontext.RouterTestC
 	}, 5*time.Minute, 5*time.Second, "Canary deployments should be ready")
 
 	// Deploy Canary ModelServers from YAML file
-	canaryModelServers := utils.LoadMultiResourceYAMLFromFile[networkingv1alpha1.ModelServer]("examples/kthena-router/ModelServer-ds1.5b-Canary.yaml")
+	canaryModelServers := utils.LoadMultiResourceYAMLFromFile[networkingv1alpha1.ModelServer](filepath.Join(testDataDir, "ModelServer-ds1.5b-Canary.yaml"))
 	require.Len(t, canaryModelServers, 2, "Canary YAML should contain 2 ModelServers")
 
 	modelServerV1 := canaryModelServers[0]
@@ -524,7 +526,7 @@ func TestModelRouteSubsetShared(t *testing.T, testCtx *routercontext.RouterTestC
 	})
 
 	// Create ModelRoute with Canary ModelServer names
-	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteSubset.yaml")
+	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRouteSubset.yaml"))
 	modelRoute.Namespace = testNamespace
 
 	// Configure ParentRefs if using Gateway API
@@ -702,7 +704,7 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 	t.Run("VerifyInputTokenRateLimitEnforcement", func(t *testing.T) {
 		t.Log("Test 1: Verifying input token rate limit")
 
-		modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteWithRateLimit.yaml")
+		modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRouteWithRateLimit.yaml"))
 		modelRoute.Namespace = testNamespace
 		// Only test input rate limit; remove output limit to avoid 429 "output token rate limit exceeded"
 		if modelRoute.Spec.RateLimit != nil {
@@ -764,7 +766,7 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 	t.Run("VerifyRateLimitWindowAccuracy", func(t *testing.T) {
 		t.Log("Test 2: Verifying rate limit window accuracy...")
 
-		modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteWithRateLimit.yaml")
+		modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRouteWithRateLimit.yaml"))
 		modelRoute.Namespace = testNamespace
 		// Only test input rate limit; remove output limit to avoid 429 "output token rate limit exceeded"
 		if modelRoute.Spec.RateLimit != nil {
@@ -833,7 +835,7 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 	t.Run("VerifyRateLimitResetMechanism", func(t *testing.T) {
 		t.Log("Test 3: Verifying rate limit reset mechanism...")
 
-		modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteWithRateLimit.yaml")
+		modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRouteWithRateLimit.yaml"))
 		modelRoute.Namespace = testNamespace
 		// Only test input rate limit; remove output limit to avoid 429 "output token rate limit exceeded"
 		if modelRoute.Spec.RateLimit != nil {
@@ -903,7 +905,7 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 	t.Run("VerifyOutputTokenRateLimitEnforcement", func(t *testing.T) {
 		t.Log("Test 4: Verifying output token rate limit (100 tokens/minute)...")
 
-		modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteWithRateLimit.yaml")
+		modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRouteWithRateLimit.yaml"))
 		modelRoute.Namespace = testNamespace
 		setupModelRouteWithGatewayAPI(modelRoute, useGatewayApi, kthenaNamespace)
 
@@ -993,7 +995,7 @@ func TestModelRouteWithGlobalRateLimitShared(t *testing.T, testCtx *routercontex
 	}
 
 	buildModelRoute := func(name, modelName, redisAddr string) *networkingv1alpha1.ModelRoute {
-		modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteWithGlobalRateLimit.yaml")
+		modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRouteWithGlobalRateLimit.yaml"))
 		modelRoute.Namespace = testNamespace
 		modelRoute.Name = name
 		modelRoute.Spec.ModelName = modelName
@@ -1183,7 +1185,7 @@ func TestModelRouteLoraShared(t *testing.T, testCtx *routercontext.RouterTestCon
 
 	// Deploy ModelRoute with LoRA adapters
 	t.Log("Deploying ModelRoute with LoRA adapters...")
-	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteLora.yaml")
+	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRouteLora.yaml"))
 	modelRoute.Namespace = testNamespace
 
 	// Configure ParentRefs if using Gateway API
@@ -1292,7 +1294,7 @@ func TestMetricsShared(t *testing.T, testCtx *routercontext.RouterTestContext, t
 
 	// Deploy ModelRoute
 	t.Log("Deploying ModelRoute...")
-	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteSimple.yaml")
+	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRouteSimple.yaml"))
 	modelRoute.Namespace = testNamespace
 
 	setupModelRouteWithGatewayAPI(modelRoute, useGatewayAPI, kthenaNamespace)
@@ -1398,7 +1400,7 @@ func TestRateLimitMetricsShared(t *testing.T, testCtx *routercontext.RouterTestC
 
 	// Deploy ModelRoute with rate limiting
 	t.Log("Deploying ModelRoute with rate limiting...")
-	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteWithRateLimit.yaml")
+	modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute](filepath.Join(testDataDir, "ModelRouteWithRateLimit.yaml"))
 	modelRoute.Namespace = testNamespace
 
 	setupModelRouteWithGatewayAPI(modelRoute, useGatewayAPI, kthenaNamespace)

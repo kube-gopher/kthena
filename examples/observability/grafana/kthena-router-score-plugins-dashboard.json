@@ -63,7 +63,7 @@
   "time": {"from": "now-1h", "to": "now"},
   "timepicker": {},
   "timezone": "",
-  "title": "Kthena Router - Score Plugins (prefix-cache & kvcache-aware)",
+  "title": "Kthena Router - Cache-Aware Score Plugins",
   "uid": "kthena-score-plugins",
   "version": 1,
   "weekStart": "",

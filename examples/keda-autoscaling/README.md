@@ -14,7 +14,7 @@ by a Prometheus query against kthena-router metrics.
 ## Files
 
 - `modelserving.yaml`   — a minimal ModelServing named `test-model` (the scale target).
-- `servicemonitor.yaml` — scrapes kthena-router `/metrics` into Prometheus.
+- `../observability/monitor/kthena-router.yaml` — scrapes kthena-router `/metrics` into Prometheus.
 - `rbac.yaml`           — grants the KEDA operator access to the ModelServing
   `scale` subresource (required for KEDA to change `spec.replicas`).
 - `scaledobject.yaml`   — the KEDA `ScaledObject` that drives scaling.
@@ -30,7 +30,7 @@ by a Prometheus query against kthena-router metrics.
 
 ```bash
 kubectl apply -f rbac.yaml
-kubectl apply -f servicemonitor.yaml
+kubectl apply -f ../observability/monitor/kthena-router.yaml
 kubectl apply -f modelserving.yaml
 kubectl apply -f slow-backend.yaml
 kubectl apply -f route.yaml

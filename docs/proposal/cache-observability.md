@@ -70,7 +70,7 @@ A key design constraint discovered during review: total scoring duration is **al
 
 #### Grafana Dashboard
 
-Ship a sample dashboard (JSON) under `examples/observability/` visualising, per model: hit rate (`1 - rate(match_ratio_bucket{le="0.0"}) / rate(match_ratio_count)`), match-ratio distribution (p50/p90/p99), Redis and tokenizer latency quantiles, error rate by stage, and prefix-cache occupancy/eviction trend.
+Ship `examples/observability/grafana/kthena-router-score-plugins-dashboard.json`, a sample dashboard visualising, per model: hit rate (`1 - rate(match_ratio_bucket{le="0.0"}) / rate(match_ratio_count)`), match-ratio distribution (p50/p90/p99), Redis and tokenizer latency quantiles, error rate by stage, and prefix-cache occupancy/eviction trend.
 
 ### Notes/Constraints
 

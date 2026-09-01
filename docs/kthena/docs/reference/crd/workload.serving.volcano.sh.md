@@ -405,6 +405,10 @@ _Appears in:_
 
 ModelBackend defines the configuration for a model backend.
 
+Deprecated: ModelBooster is deprecated as of Kthena v1.1.
+Use ModelServing, ModelServer, and ModelRoute instead.
+ModelBooster will be removed no earlier than Kthena v1.5.
+
 
 
 _Appears in:_
@@ -430,6 +434,10 @@ _Underlying type:_ _string_
 
 ModelBackendType defines the type of model backend.
 
+Deprecated: ModelBooster is deprecated as of Kthena v1.1.
+Use ModelServing, ModelServer, and ModelRoute instead.
+ModelBooster will be removed no earlier than Kthena v1.5.
+
 _Validation:_
 - Enum: [vLLM vLLMDisaggregated]
 
@@ -451,6 +459,10 @@ _Appears in:_
 
 ModelBooster is the Schema for the models API.
 
+Deprecated: ModelBooster is deprecated as of Kthena v1.1.
+Use ModelServing, ModelServer, and ModelRoute instead.
+ModelBooster will be removed no earlier than Kthena v1.5.
+
 
 
 _Appears in:_
@@ -470,6 +482,10 @@ _Appears in:_
 
 ModelBoosterList contains a list of ModelBooster.
 
+Deprecated: ModelBooster is deprecated as of Kthena v1.1.
+Use ModelServing, ModelServer, and ModelRoute instead.
+ModelBooster will be removed no earlier than Kthena v1.5.
+
 
 
 
@@ -486,6 +502,10 @@ ModelBoosterList contains a list of ModelBooster.
 
 
 ModelBoosterSpec defines the desired state of ModelBooster.
+
+Deprecated: ModelBooster is deprecated as of Kthena v1.1.
+Use ModelServing, ModelServer, and ModelRoute instead.
+ModelBooster will be removed no earlier than Kthena v1.5.
 
 
 
@@ -590,6 +610,10 @@ _Appears in:_
 
 ModelStatus defines the observed state of ModelBooster.
 
+Deprecated: ModelBooster is deprecated as of Kthena v1.1.
+Use ModelServing, ModelServer, and ModelRoute instead.
+ModelBooster will be removed no earlier than Kthena v1.5.
+
 
 
 _Appears in:_
@@ -607,6 +631,10 @@ _Appears in:_
 
 
 ModelWorker defines the model worker configuration.
+
+Deprecated: ModelBooster is deprecated as of Kthena v1.1.
+Use ModelServing, ModelServer, and ModelRoute instead.
+ModelBooster will be removed no earlier than Kthena v1.5.
 
 
 
@@ -630,6 +658,10 @@ _Appears in:_
 _Underlying type:_ _string_
 
 ModelWorkerType defines the type of model worker.
+
+Deprecated: ModelBooster is deprecated as of Kthena v1.1.
+Use ModelServing, ModelServer, and ModelRoute instead.
+ModelBooster will be removed no earlier than Kthena v1.5.
 
 _Validation:_
 - Enum: [server prefill decode controller coordinator]

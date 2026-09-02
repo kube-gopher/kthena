@@ -3,7 +3,9 @@ reviewers:
   - YaoZengzeng
   - LiZhenCheng9527
   - hzxuzhonghu
+  - kube-gopher
 approvers:
   - git-malu
   - YaoZengzeng
   - LiZhenCheng9527
+  - kube-gopher

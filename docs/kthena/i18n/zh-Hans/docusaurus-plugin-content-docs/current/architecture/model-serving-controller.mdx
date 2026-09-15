@@ -1,0 +1,66 @@
+import LightboxImage from '@site/src/components/LightboxImage';
+import modelServing from '../assets/diagrams/model-serving.svg';
+
+# Model Serving 控制器 {#model-serving-controller}
+
+ModelServing Controller 是 Kthena 中服务工作负载 `ModelServing` 的控制器，负责协调 `ModelServing` 资源并管理服务 Pod 的生命周期。
+
+## Model Serving 概览 {#model-serving-overview}
+
+`ModelServing` 面向大模型分布式服务场景，提供灵活易用的工作负载配置，
+支持 Prefill-Decode 分离，以及流水线并行（PP）、张量并行（TP）等并行服务方式。
+
+## Model Serving 架构 {#model-serving-architecture}
+
+<LightboxImage src={modelServing} alt="ModelServing 架构"/>
+
+`ModelServing` 的自定义资源定义（CRD）主要分为三个层次：
+
+1. ModelServing
+
+`ModelServing` 是一种定义具体推理服务的工作负载，管理一组配置一致的 `ServingGroup` 服务实例。
+
+- 支持拓扑感知和 Gang 调度：可以将同一个 `ServingGroup` 内的服务 Pod 同时调度到同一个 **HyperNode**，并支持配置 Gang 调度参数。
+  只有 HyperNode 满足服务任务所需的**最少 Pod 数量**时，才允许调度。
+- 支持扩缩容和滚动升级：在 `ServingGroup` 和 `Role` 两个层级提供扩缩容、滚动更新和故障恢复。`ServingGroupRollingUpdate` 使用 ModelServing 层级的发布配置，`RoleRollingUpdate` 使用各 Role 上定义的配置。
+
+2. ServingGroup
+
+`ServingGroup` 是一组服务实例，也是能够独立完成单个服务的最小单元。
+
+- 支持定义多种服务角色：通过 `Role` 表示 **Prefill**、**Decode** 等角色，以管理 xPyD 配置等复杂服务场景。
+- 支持优雅重建：服务任务执行过程中发生故障时，允许 Pod 在可配置的宽限期内恢复，超时后才触发重建，以减少服务中断。
+
+3. Role
+
+`Role` 表示最小功能单元，可对应 Prefill、Decode、Aggregated 等实例类型。
+
+- 支持双 Pod 模板：单个 `Role` 实例中可以分别定义 `Entry` Pod 和 `Worker` Pod 两种模板。
+`Entry` Pod 作为入口接收服务请求并分发任务，`Worker` Pod 负责实际的推理计算。
+- 支持网络拓扑感知调度：将同一个 `Role` 内的 `Entry` Pod 和 `Worker` Pod 调度到同一个 **HyperNode**。
+
+## 示例 {#example}
+
+更多信息请参见[示例](https://github.com/volcano-sh/kthena/tree/main/examples/model-serving/sample.yaml)。
+
+## 标签与环境变量 {#labels-and-environment-variables}
+
+### 标签 {#labels}
+
+| 键 | 说明 | 示例 | 适用资源 |
+|--------------------------------------|------------------------------------------|------------|-------------|
+| modelserving.volcano.sh/name | ModelServing 名称的标签键 | sample | pod |
+| modelserving.volcano.sh/group-name | ServingGroup 名称的标签键 | sample-0 | pod,service |
+| modelserving.volcano.sh/role | Role 名称的标签键 | decode | pod,service |
+| modelserving.volcano.sh/role-id | 角色序号的标签键 | decode-0 | pod,service |
+| modelserving.volcano.sh/revision | modelServing 的修订版本标签 | 67b8d4b8c7 | pod |
+| modelserving.volcano.sh/entry | Entry Pod 的标签键 | true | pod |
+
+
+### 环境变量 {#environment-variables}
+
+| 键 | 说明 | 示例 | 适用资源 |
+|---------------|---------------------------------------------------------------------|-------------------------------------------------|------------|
+| GROUP_SIZE | 服务 Role 实例规模的环境变量 | 4 | pod |
+| ENTRY_ADDRESS | 通过无头 Service 访问 Entry 的地址 | sample-0-decode-0-0.sample-0-decode-0-0.default | pod |
+| WORKER_INDEX | Pod 在服务 Role 实例中的索引或标识 | 0 | pod |

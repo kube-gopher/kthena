@@ -1,0 +1,149 @@
+import LightboxImage from '@site/src/components/LightboxImage';
+import requestPipeline from '../assets/diagrams/architecture/request_pipeline.svg';
+
+# 架构概览 {#architecture-overview}
+
+Kthena 采用**双平面架构**，将*用户声明的目标*与*请求的处理路径*分开。**控制面**将 CRD 协调为实际运行的系统；**数据面**通过感知模型的处理流程，将每个推理请求路由到合适的 Pod。
+
+两个平面**可以独立部署**。它们不共享进程内状态，也不直接相互调用，而是各自与 Kubernetes API 交互。每个平面都是一个独立的 Go 二进制程序，打包为独立的 Helm 子 Chart，并拥有自己的 CRD 组。因此，你可以单独运行其中任意一个平面，详见下文的[模块化部署](#modular-deployment)。
+
+---
+
+## 控制面：声明式模型生命周期管理 {#control-plane--declarative-model-lifecycle}
+
+控制面负责感知和管理模型。你通过 CRD 描述期望状态，控制器持续将其协调为实际资源，并提供安全约束、发布逻辑和状态信息。
+
+### 自定义资源定义（CRD） {#custom-resource-definitions-crds}
+
+Kthena 使用 `ModelServing`、`ModelServer` 和 `ModelRoute` 描述推理工作负载与流量，并按需配置自动扩缩容策略。
+
+
+| CRD | 用途 |
+| --- | --- |
+| **ModelRoute** | 声明路由规则，可按 `modelName`、`loraAdapters`、路径或请求头匹配。支持加权流量分配、金丝雀/A-B 策略和基于 Token 的 `rateLimit`。 |
+| **ModelServer** | 定义推理 Pod 的服务暴露方式和流量策略。通过 `workloadSelector` 发现后端（包括按角色划分的 Prefill/Decode 组），并应用重试、超时和连接设置。 |
+| **ModelServing** | 将推理工作负载组织为具有角色副本的 `ServingGroup`。支持 Entry/Worker Pod 模板、`recoveryPolicy`、拓扑感知和 Gang 调度、滚动升级以及专用调度器。 |
+| **AutoScalingPolicy** | 指定指标端点与触发条件（CPU、内存、自定义指标）、目标阈值和扩缩容行为，包括应对流量突增的 panic 窗口，以及避免频繁波动的稳定窗口。 |
+| **AutoScalingPolicyBinding** | 通过两种模式将策略绑定到 `ModelServing`：**scalingConfiguration** 用于指标驱动的副本管理，**optimizerConfiguration** 用于在异构实例类型（例如 H100 + A100）之间按成本分配资源。 |
+
+### 控制器 {#controllers}
+
+两个控制器将上述 CRD 协调为运行时资源：
+
+| 控制器 | 职责 |
+| --- | --- |
+| **Model Serving Controller** | 管理 `ServingGroup` 和各角色的副本，负责拓扑感知与 Gang 调度、故障恢复、滚动升级，以及各角色 Entry/Worker Pod 模板的协调。 |
+| **Autoscaler Controller** | 对照 `AutoScalingPolicy` 目标评估运行时指标，计算期望副本数，并通过 `AutoScalingPolicyBinding` 调整异构硬件中的实例组合，以满足 SLO 和成本目标。支持稳定和 panic 两种扩缩容模式。 |
+
+---
+
+## 数据面：请求级智能路由 {#data-plane--request-level-intelligent-routing}
+
+数据面负责 Kthena 的请求处理。每个推理请求都经过 **Kthena Router**，完成安全检查、公平排队和模型感知调度后，再发送到合适的推理 Pod。
+
+### 请求处理流程 {#request-pipeline}
+
+<div style={{ textAlign: 'center' }}>
+    <LightboxImage src={requestPipeline} alt="请求处理流程" />
+</div>
+
+每个请求依次经过六个阶段：
+
+| 阶段 | 处理内容 |
+| --- | --- |
+| **1. 认证与授权** | 在处理请求前验证身份和权限。 |
+| **2. 限流** | 按模型和租户限制吞吐量，支持基于 Token 的限流，防止资源被独占。 |
+| **3. 公平调度** | 按模型公平排队，避免一个模型的流量突增挤占共享集群中其他模型的资源。 |
+| **4. 调度** | 可插拔调度器执行**过滤 → 评分 → 选择**，选出一组候选 Pod，详见下文。 |
+| **5. 负载均衡** | 将请求路由到候选后端实例，并支持重试策略。 |
+| **6. 代理** | 将请求发送到选定的推理 Pod，并流式返回响应。 |
+
+### 可插拔调度器 {#pluggable-scheduler}
+
+调度器是 Kthena 智能路由的核心。它采用类似 Kubernetes 调度器的过滤/评分模式，但作用于*请求级别*，以微秒级而非毫秒级的速度运行。
+
+**过滤插件**（排除不符合条件的 Pod）：
+
+| 插件 | 逻辑 |
+| --- | --- |
+| **Least Requests** | 排除活跃请求数超过可配置阈值的 Pod。 |
+| **LoRA Affinity** | 排除未加载所需 LoRA 适配器的 Pod。 |
+
+**评分插件**（对剩余 Pod 进行加权排序）：
+
+| 插件 | 优化目标 |
+| --- | --- |
+| **Least Requests** | 优先选择正在处理的请求最少的 Pod，以减少排队延迟。 |
+| **Least Latency** | 根据近期观测结果，降低首 Token 延迟（TTFT）和每个输出 Token 的耗时（TPOT）。 |
+| **KV Cache Aware** | 优先选择可命中 KV 缓存最多的 Pod，以提高缓存利用率并减少重复计算。 |
+| **Prefix Cache** | 将请求的提示词前缀与各 Pod 中已缓存的前缀匹配，以提高缓存命中率。 |
+| **GPU Cache** | 考虑 GPU 显存利用率，以避免请求被抢占。 |
+
+**PD 感知调度：**当请求指向 Prefill/Decode 分离组时，调度器先对 Decode Pod 评分，再为每个候选 Pod 匹配同组内兼容的 Prefill Pod，以利用 KV 缓存局部性并减少数据传输。
+
+---
+
+## 模块化部署 {#modular-deployment}
+
+Kthena 注重轻量化：整个平台由两个独立的 Go 二进制程序组成，依赖少，并打包为与两个平面一一对应的 Helm 子 Chart。
+
+| 子 Chart | 二进制程序 | CRD 组 | 管理的资源 |
+| --- | --- | --- | --- |
+| `networking` | `kthena-router` | `networking.serving.volcano.sh` | `ModelRoute`、`ModelServer`、`ExternalModelProvider` |
+
+由于两个平面解耦，支持以下三种部署方式：
+
+- **仅控制面**（`--set networking.enabled=false`）：将 Kthena 作为工作负载管理器。通过 `ModelServing` 声明基于角色、Gang 调度和拓扑感知的副本，并由自动扩缩容策略管理容量；流量仍通过现有网关或普通 `Service` 访问。
+- **仅数据面**（`--set workload.enabled=false`）：将路由器作为独立的、感知模型的 LLM 网关。`ModelServer` 通过标签选择器 `workloadSelector` 发现后端，因此后端 Pod 可以由 Deployment、StatefulSet 或其他 Operator 管理，也可以对接 OpenAI 等外部提供商，无需 Kthena 工作负载 CRD。
+
+每个子 Chart 仅安装自己的 CRD、RBAC 和 Webhook，按组件安装不会引入未使用的资源。具体命令请参见[安装指南](../getting-started/installation.md#component-scoped-installation)。
+
+---
+
+## 推理 Pod 架构 {#inference-pod-architecture}
+
+推理工作负载被组织为 **ServingGroup**，每组包含多个副本。副本通过不同的**角色**，分离大模型推理中两类特性不同的工作负载。
+
+### 基于角色的分离 {#role-based-disaggregation}
+
+```
+ModelServing
+ └── ServingGroup（实例 1 … N）
+      ├── Prefill 角色    → 优化计算吞吐量
+      │    ├── Entry Pod   （入口）
+      │    └── Worker Pods （并行处理提示词）
+      └── Decode 角色     → 优化延迟
+           ├── Entry Pod   （入口）
+           └── Worker Pods （增量生成 Token）
+```
+
+| 角色 | 工作负载特征 | 扩缩容策略 |
+| --- | --- | --- |
+| **Prefill** | 计算密集型的提示词初始化和上下文编码 | 以吞吐量为目标，在每个 GPU 上批量处理多个提示词 |
+| **Decode** | 受内存带宽限制、对延迟敏感的逐 Token 生成 | 以延迟为目标，减少每个 Pod 的队列深度 |
+
+各角色拥有独立的副本数（例如 2 个 Prefill : 4 个 Decode），可以根据工作负载特征分配硬件，避免任一阶段过度配置。
+
+### Pod 组件 {#pod-components}
+
+每个副本的部署可能包含以下组件：
+
+| 组件 | 用途 |
+| --- | --- |
+| **Entry Pod** | 为特定角色的请求提供入口端点。 |
+| **Worker Pod(s)** | 执行模型推理计算，大模型可以在多个 Worker 之间进行张量并行。 |
+| **Downloader** | 通用模型和制品下载器，支持 HuggingFace、ModelScope、S3/OBS 和 PVC 数据源，提供并发下载与文件锁。 |
+| **Runtime Agent** | 以 Sidecar 方式运行，代理并统一引擎指标（vLLM / SGLang），提供 LoRA 适配器生命周期 API（下载、加载、卸载），处理 PD 分离中的 KV 缓存事件，并提供模型下载端点。 |
+| **LLM Engine** | 实际执行推理的后端，如 **vLLM**、**SGLang** 或其他受支持的引擎。 |
+
+### KV 缓存传输 {#kv-cache-transfer}
+
+在 Prefill-Decode 分离模式下，KV 缓存状态需要从 Prefill Pod 传输到 Decode Pod。Kthena 支持三种连接器后端：
+
+| 连接器 | 特点 |
+| --- | --- |
+| **LMCache** | 基于内存、低延迟，支持同节点或 RDMA |
+| **MoonCake** | 分布式、跨节点、支持容错 |
+| **NIXL** | 轻量级、基于 NCCL、支持 GPU 直连 |
+
+连接器的选择对应用透明，Runtime Agent 和 KV 缓存连接器会自动处理传输。

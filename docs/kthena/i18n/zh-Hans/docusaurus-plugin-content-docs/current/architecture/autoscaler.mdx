@@ -1,0 +1,66 @@
+import LightboxImage from '@site/src/components/LightboxImage';
+import architectureAutoscaler from '../assets/diagrams/architecture-autoscaler.svg';
+import architectureAutoscalerOptimizeExample from '../assets/diagrams/architecture-autoscaler-optimize-example.svg';
+
+# 自动扩缩容 {#autoscaler}
+
+推理请求实时变化，所需硬件资源也随之动态波动。Kthena Autoscaler 是 Kthena 的可选组件，运行于 Kubernetes 环境，根据实时负载动态调整已部署的服务实例数量，在维持健康业务指标（如 SLO）的同时优化计算资源消耗。
+
+## 功能说明 {#feature-description}
+
+Kthena Autoscaler 定期从所管理服务实例的 Pod 收集运行时指标，根据用户指定的监控指标及目标值计算所需实例数，并按照配置的策略执行扩缩容。
+
+<div style={{ textAlign: 'center' }}>
+  <LightboxImage src={architectureAutoscaler} alt="自动扩缩容架构"></LightboxImage>
+</div>
+
+Kthena Autoscaler 提供两种扩缩容粒度：**同构实例自动扩缩容**和**异构实例自动扩缩容**。
+
+### 同构实例自动扩缩容 {#homogeneous-instances-autoscale}
+
+**同构实例自动扩缩容**针对单一类型的推理实例，行为类似 [KPA](https://knative.dev/docs/serving/autoscaling/kpa-specific/)，支持 `Stable` 和 `Panic` 两种模式。它根据业务指标，对相同类型的部署（通过同一个 Deployment 或 ModelServing CR 部署的引擎）进行扩缩容。
+
+### 异构实例自动扩缩容 {#heterogeneous-instances-autoscale}
+
+同一个模型可以使用多种配置部署服务实例，包括：
+- 异构资源类型（GPU/NPU）
+- 不同推理引擎（vLLM/Sglang）
+- 不同运行参数（如 TP/DP 配置）
+
+这些部署方式不同的服务实例提供相同的推理服务，对外暴露一致的业务功能，但硬件资源需求和性能有所不同。下图展示了一种部署场景。
+
+<LightboxImage src={architectureAutoscalerOptimizeExample} alt="异构实例自动扩缩容示例"></LightboxImage>
+
+**异构实例自动扩缩容**由实例预测和实例调度两部分组成。
+
+**实例预测**与同构实例自动扩缩容的逻辑相同，在每个调度周期根据运行时指标，动态计算服务实例组所需的实例总数。
+
+**实例调度**动态调整功能相同但部署配置不同的实例比例，以提高硬件资源利用率。由于模型冷启动开销会导致调度周期之间出现显著的状态转换，从建模角度看，该调度阶段可以视为一个[整数规划问题](https://en.wikipedia.org/wiki/Integer_programming)。
+
+异构实例自动扩缩容采用结合倍增策略的贪心算法。首先，将各实例类型的 `maxReplicas` 与 `minReplicas` 之差相加，得到可用的 `capacity`，即可以调节的实例容量。每次扩容时，从该容量中选择一部分进行扩展。
+
+根据倍增原则，将 `capacity` 按 `costExpansionRate` 的幂次划分为多个块，作为扩容批次。将不同服务实例的批次合并，按成本升序排列，再将排序后的批次展开为相应实例组合，得到长度等于容量的扩容序列 `seq`。
+
+$$
+seq = sorted(\bigcup_{i=1}^{N} \{ P^k \cdot c_i \mid k \in \{0,1,\ldots,M_i\} \} \cup \{ (C_i - \sum_{k=0}^{M_i} P^k) \cdot c_i \})
+$$
+
+其中：
+- $N$：服务实例类型的数量
+- $P$：服务实例的 `costExpansionRate`
+- $c_i$：第 i 类推理实例的成本
+- $M_i$：第 i 类推理实例的显式幂次项数量
+- $C_i$：第 i 类推理实例的容量（maxReplicas - minReplicas）
+
+`costExpansionRate` 可以理解为每种推理实例类型中“下一批次的成本扩展倍率”。
+
+当预测需要 K 个实例时，保留 `seq` 中的前 K 个实例。该策略有助于在扩缩容过程中复用已启动的实例，从而减少冷启动开销。
+
+
+## 约束 {#constraints}
+
+使用 **Kthena Autoscaler** 时，请注意以下约束：
+
+- 一个推理实例只能由同构或异构自动扩缩容中的一种机制管理，不能同时由两者管理。也就是说，不应为同一个 Deployment 或 Kthena CR 配置多个自动扩缩容策略。
+
+- 使用异构自动扩缩容前，必须为每种推理实例类型配置成本。建议使用成本参数表示各实例的计算能力，运维人员可以通过 Kthena 项目提供的脚本获取这些数值。

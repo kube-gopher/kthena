@@ -1,0 +1,113 @@
+---
+slug: launch-blog-post
+title: "Volcano 社区推出 Kthena 子项目：重新定义智能 LLM 推理"
+authors: [ hzxuzhonghu ]
+date: 2025-09-01
+tags: [ ]
+---
+
+import LightboxImage from '@site/src/components/LightboxImage';
+import kthenaOrchestration from './images/model-serving.svg';
+
+# Volcano 社区推出 Kthena 子项目：重新定义智能 LLM 推理
+
+今天，我们很高兴向全球开发者和 MLOps 工程师宣布 Volcano 社区的新子项目：**Kthena** 的诞生。
+
+Kthena 是一个云原生、高性能的 LLM 推理路由、编排和调度系统，专为 Kubernetes 设计。
+它旨在解决在生产环境中大规模部署和服务大型语言模型（LLM）的核心挑战。通过其独特的功能，如 **KV 缓存感知调度** 和 **预填充/解码分离路由**，Kthena 显著提高了 GPU 资源利用率，减少了推理延迟，并为企业提供了前所未有的灵活性和控制力。
+
+作为 Volcano 的一个子项目，Kthena 致力于帮助 Volcano 将其边界扩展到 AI 训练之外，创建一个完整的训练与推理一体化解决方案。
+
+[**项目地址**](https://github.com/volcano-sh/kthena)
+
+<!-- truncate -->
+
+## 生产环境 LLM 服务中的“最后一公里”挑战 {#the-last-mile-challenge-of-production-llm-serving}
+
+大型语言模型（LLM）正在以前所未有的速度重塑各个行业，但在生产环境中高效且具有成本效益地部署它们——特别是在基于 Kubernetes 的云原生平台上——仍然充满困难。开发者通常面临以下挑战：
+
+1. **资源利用率低**：LLM 推理，特别是其独特的 KV 缓存机制，会消耗动态且庞大的 GPU 内存。传统的负载均衡通常使用轮询算法，这种算法无法感知这些负载特性，导致 GPU 资源在请求排队时处于闲置状态，从而产生高成本。
+2. **平衡延迟与吞吐量的困难**：LLM 推理由两个阶段组成：**预填充**（处理输入提示）和**解码**（生成 token）。前者计算量大，而后者受内存限制。将它们一起调度通常会阻碍针对性的优化，从而影响整体服务响应速度和吞吐量。因此，预填充/解码（PD）分离已成为主流，但高效的路由和调度仍然是一个挑战。
+3. **复杂的多租户和多模型管理**：在企业环境中，通常需要同时服务多个业务单元、不同模型版本或 LoRA 微调模型。实现公平调度、优先级管理和动态路由是一个复杂的工程问题；一些行业解决方案甚至将 AI 网关与大型模型一一对应。
+4. **缺乏原生 Kubernetes 集成**：许多现有解决方案要么是与 Kubernetes 生态系统脱节的外部系统，要么过于复杂，无法满足生产级使用所需的简便性和操作灵活性。
+
+## Kthena：云原生 LLM 推理的智能大脑 {#kthena-the-intelligent-brain-of-cloud-native-llm-inference}
+
+为了解决这些挑战，Kthena 应运而生。它并不打算替代现有的 LLM 服务框架（如 vLLM 或 SGLang），而是作为其上的智能**流量枢纽**和**调度中心**，深度集成到 Kubernetes 中。
+
+
+Kthena 由两个主要组件组成：
+
+1) **Kthena 路由器**：一个独立的、高性能的多模型路由器，负责接收推理请求，并根据 `ModelRoute` 规则智能地将其分发到后端 `ModelServer` 实例。
+
+2) **Kthena 控制器管理器**：Kubernetes 控制平面中的一个控制器，由多个控制器组成，负责 LLM 工作负载的编排和生命周期管理。它持续地调和并关联多个 CRD（如 `ModelServing`、`AutoScalingPolicy` 和 `ModelRoute`/`ModelServer`），将声明式 API 转换为运行时资源。
+
+`ModelServing` 控制器负责编排 `ServingGroup` 和 `Prefill/Decode` 角色分组；支持拓扑感知调度、Gang 调度、滚动升级和故障恢复；并基于 `AutoScalingPolicy` 实现弹性伸缩。
+
+该架构使 Kthena 成为连接用户请求与 LLM 推理后端的高度可编程桥梁。
+
+## 核心功能与优势 {#core-features-and-advantages}
+
+Kthena 的优势在于其专为 LLM 推理场景设计的核心能力。
+
+### 1) 生产级推理编排（ModelServing） {#1-production-grade-inference-orchestration-modelserving}
+
+<div style={{ textAlign: 'center' }}>
+    <LightboxImage src={kthenaOrchestration} alt="Kthena ModelServing 编排图" />
+</div>
+
+- **三层 LLM 工作负载模型**：`ModelServing -> ServingGroup -> Role`。单一 API 支持多种部署形式，包括原生 LLM 部署、PD 分离和大规模 EP（专家并行）。
+- **Prefill-Decode 分离部署**：将计算密集型的 Prefill 实例调度到高计算能力节点，将内存受限的 Decode 实例调度到高带宽内存节点，实现更好的资源匹配和更低的端到端延迟。Prefill 和 Decode 可以独立扩展，以适应混合流量模式。
+- **多种并行模式**：灵活配置 TP/PP/DP/EP 以最大化利用率并满足 SLO 目标。
+- **拓扑感知 + Gang 调度**：Gang 调度确保相关 Pod（ServingGroup/Role）的原子级部署，减少尾延迟并避免资源碎片浪费；拓扑感知调度提升并行通信效率。
+
+### 2) 智能的模型感知路由（Kthena Router） {#3-intelligent-model-aware-routing-kthena-router}
+
+- **多模型路由**：兼容 OpenAI API；根据头信息或请求内容进行路由。
+- **可插拔调度**：最少请求、最低延迟、KV 缓存感知、前缀缓存感知、LoRA 亲和性、GPU 利用率感知、公平调度等。
+- **热插拔 LoRA 无中断**：检测推理引擎加载的适配器并实现无停机路由。
+- **流量治理**：基于权重的路由、金丝雀发布、令牌级速率限制和故障切换。
+- **一体化路由架构**：无需部署 Envoy Gateway；原生支持 PD 分离流量，并整合多层路由以简化操作。
+
+### 3) 成本驱动的自动扩缩（Autoscaler） {#4-cost-driven-auto-scaling-autoscaler}
+
+- **同质化扩缩**：稳定模式与突发模式，可按业务指标（CPU/GPU/内存/自定义）进行扩缩。
+- **异构部署优化**：在多个推理引擎和异构加速器之间进行成本-能力贪婪部署。
+
+### 4) 支持主流推理引擎和异构硬件 {#5-support-for-mainstream-inference-engines-and-heterogeneous-hardware}
+
+- 支持 vLLM、SGLang、Triton/TGI 等，提供统一的 API 抽象和标准化指标。
+- 支持 GPU/NPU 混合部署，配合异构自动扩展以平衡成本和 SLO。
+
+### 5) 内置流量控制和公平调度 {#6-built-in-traffic-control-and-fair-scheduling}
+
+- **公平调度**：基于优先级和历史令牌消耗；防止资源饥饿。
+- **速率限制**：按用户、模型和令牌长度进行精细化控制。
+
+## 极致性能提升 {#extreme-performance-improvements}
+
+基于 Kthena 路由器的调度插件架构，在系统提示较长的场景下（例如 4096 个 token），相比随机基线，**KV 缓存感知 + 最少请求**策略：
+
+- 吞吐量可提高约 **2.73×**。
+- TTFT（首个 token 时间）可减少约 **73.5%**。
+- 端到端延迟可降低超过 **60%**。
+
+| 插件配置 | 吞吐量（请求/秒） | TTFT（秒） | 端到端延迟（秒） |
+|------------------------------|-------------------:|---------:|-----------------------:|
+| 最少请求 + KVCacheAware |          **32.22** | **9.22** |               **0.57** |
+| 最少请求 + 前缀缓存 |              23.87 |    12.47 |                   0.83 |
+| 随机 |              11.81 |    25.23 |                   2.15 |
+
+在短提示场景下，差距会随着提示长度而收敛，但在多轮对话、模板化生成以及前缀高度相似的业务场景中，KV 缓存感知路由能够带来显著提升。实际改进取决于模型规模、提示长度和硬件，但“混合匹配、基于场景的选择”方法已被证明是有效的。
+
+## 未来路线图 {#future-roadmap}
+
+Kthena 在早期规划和开发阶段得到了社区用户的关注和支持，但这仅仅是一个开始。我们计划支持更高效的调度算法、更多大模型部署的最佳实践，并将继续专注于大规模部署和 LLM 推理性能优化。
+
+## 立即开始探索 Kthena {#start-exploring-kthena-now}
+
+- **GitHub 仓库**：https://github.com/volcano-sh/kthena
+- **官方网站**：https://kthena.volcano.sh/
+- **社区（Slack）**：https://cloud-native.slack.com/archives/C011GJDQS0N
+
+让我们携手赋予大语言模型云原生能力，释放人工智能的全部潜力。

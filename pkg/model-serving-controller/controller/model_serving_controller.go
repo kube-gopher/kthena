@@ -56,6 +56,7 @@ import (
 	listerv1alpha1 "github.com/volcano-sh/kthena/client-go/listers/workload/v1alpha1"
 	workloadv1alpha1 "github.com/volcano-sh/kthena/pkg/apis/workload/v1alpha1"
 	"github.com/volcano-sh/kthena/pkg/model-serving-controller/datastore"
+	"github.com/volcano-sh/kthena/pkg/model-serving-controller/inplace"
 	"github.com/volcano-sh/kthena/pkg/model-serving-controller/plugins"
 	"github.com/volcano-sh/kthena/pkg/model-serving-controller/podgroupmanager"
 	"github.com/volcano-sh/kthena/pkg/model-serving-controller/utils"
@@ -351,6 +352,11 @@ func (c *ModelServingController) updatePod(_, newObj interface{}) {
 			klog.Errorf("get model Serving failed when update pod %s/%s: %v", newPod.Namespace, newPod.Name, err)
 		}
 		return
+	}
+
+	// An in-place update moves to its next step when its Pods change, such as when a container restarts on the target image.
+	if c.initialSync.Load() && inplace.InUpdate([]*corev1.Pod{newPod}, ms.UID) {
+		defer c.enqueueModelServing(ms)
 	}
 
 	if c.shouldSkipHandling(ms, servingGroupName, newPod) {
@@ -656,7 +662,8 @@ func (c *ModelServingController) syncServingGroupReplicas(ctx context.Context, m
 	replicas := modelServingReplicas(ms)
 	expectedCount := replicas
 	isServingGroupRollingUpdate := ms.Spec.RolloutStrategy == nil || ms.Spec.RolloutStrategy.Type == workloadv1alpha1.ServingGroupRollingUpdate
-	if isServingGroupRollingUpdate {
+	// An in-place update changes existing Pods, so there is nothing to surge.
+	if isServingGroupRollingUpdate && inplace.UpdateMethodOf(ms) != workloadv1alpha1.InPlaceUpdateMethod {
 		maxSurge, err := utils.GetMaxSurge(ms)
 		if err != nil {
 			return fmt.Errorf("failed to calculate maxSurge: %v", err)
@@ -1377,6 +1384,11 @@ func (c *ModelServingController) manageRollingUpdate(ctx context.Context, ms *wo
 		return fmt.Errorf("cannot get ServingGroupList from store, err:%v", err)
 	}
 
+	// InPlace never recreates outdated resources, so this holds even when the webhook is disabled.
+	if inplace.UpdateMethodOf(ms) == workloadv1alpha1.InPlaceUpdateMethod {
+		return c.manageInPlaceRollout(ctx, ms, servingGroupList, revision)
+	}
+
 	partition, _, _ := c.getPartition(modelServingPartition(ms), modelServingReplicas(ms))
 	// Separate outdated groups into two categories: not-running and running
 	// We prioritize updating not-running outdated groups first
@@ -1390,13 +1402,15 @@ func (c *ModelServingController) manageRollingUpdate(ctx context.Context, ms *wo
 
 	newServingGroupUnavailableCount := 0
 	for _, sg := range groupsAfterPartition {
+		// A ServingGroup left with an unfinished in-place update is replaced, whatever its revision labels say.
+		outdated := sg.Revision != revision || c.hasUnfinishedInPlaceUpdate(ms, sg.Name)
 		if sg.Status != datastore.ServingGroupRunning {
-			if sg.Revision == revision {
+			if !outdated {
 				newServingGroupUnavailableCount++
 			} else {
 				notRunningOutdatedGroups = append(notRunningOutdatedGroups, sg)
 			}
-		} else if sg.Revision != revision {
+		} else if outdated {
 			runningOutdatedGroups = append(runningOutdatedGroups, sg)
 		}
 	}

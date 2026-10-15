@@ -506,12 +506,13 @@ func exclusiveConditionTypes(condition1 metav1.Condition, condition2 metav1.Cond
 	return false
 }
 
-// ParseAdmissionRequest parses the HTTP request and extracts the AdmissionReview and ModelServing.
-func ParseModelServingFromRequest(r *http.Request) (*admissionv1.AdmissionReview, *workloadv1alpha1.ModelServing, error) {
+// ParseModelServingFromRequest parses the HTTP request and extracts the AdmissionReview, the ModelServing, and the old ModelServing.
+// The old ModelServing is nil unless the operation is an update, which must carry it.
+func ParseModelServingFromRequest(r *http.Request) (*admissionv1.AdmissionReview, *workloadv1alpha1.ModelServing, *workloadv1alpha1.ModelServing, error) {
 	// Verify the content type is accurate
 	contentType := r.Header.Get("Content-Type")
 	if contentType != "application/json" {
-		return nil, nil, fmt.Errorf("invalid Content-Type, expected application/json, got %s", contentType)
+		return nil, nil, nil, fmt.Errorf("invalid Content-Type, expected application/json, got %s", contentType)
 	}
 
 	var body []byte
@@ -519,7 +520,7 @@ func ParseModelServingFromRequest(r *http.Request) (*admissionv1.AdmissionReview
 		defer r.Body.Close()
 		data, err := io.ReadAll(r.Body)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to read request body: %v", err)
+			return nil, nil, nil, fmt.Errorf("failed to read request body: %v", err)
 		}
 		body = data
 	}
@@ -527,15 +528,25 @@ func ParseModelServingFromRequest(r *http.Request) (*admissionv1.AdmissionReview
 	// Parse the AdmissionReview request
 	var admissionReview admissionv1.AdmissionReview
 	if err := json.Unmarshal(body, &admissionReview); err != nil {
-		return nil, nil, fmt.Errorf("failed to decode body: %v", err)
+		return nil, nil, nil, fmt.Errorf("failed to decode body: %v", err)
 	}
 
 	var ms workloadv1alpha1.ModelServing
 	if err := json.Unmarshal(admissionReview.Request.Object.Raw, &ms); err != nil {
-		return nil, nil, fmt.Errorf("failed to decode modelServing: %v", err)
+		return nil, nil, nil, fmt.Errorf("failed to decode modelServing: %v", err)
 	}
 
-	return &admissionReview, &ms, nil
+	if admissionReview.Request.Operation != admissionv1.Update {
+		return &admissionReview, &ms, nil, nil
+	}
+	if len(admissionReview.Request.OldObject.Raw) == 0 {
+		return nil, nil, nil, fmt.Errorf("update request has no old modelServing")
+	}
+	var oldMS workloadv1alpha1.ModelServing
+	if err := json.Unmarshal(admissionReview.Request.OldObject.Raw, &oldMS); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to decode old modelServing: %v", err)
+	}
+	return &admissionReview, &ms, &oldMS, nil
 }
 
 // SendAdmissionResponse sends the AdmissionReview response back to the client

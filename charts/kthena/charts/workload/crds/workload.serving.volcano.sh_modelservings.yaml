@@ -168,6 +168,16 @@ spec:
                     required:
                     - protectionLevel
                     type: object
+                  progressDeadlineSeconds:
+                    description: |-
+                      ProgressDeadlineSeconds is the maximum time for an in-place updated unit to become ready on the target image, measured from when the update of the unit starts.
+                      It includes any wait before the images are patched.
+                      When the deadline passes, the update of the unit has failed, and its Pods that are not ready on the target image follow the RecoveryPolicy.
+                      It is only valid when updateMethod is InPlace.
+                      The controller defaults it to 1800 seconds.
+                    format: int32
+                    minimum: 60
+                    type: integer
                   rollingUpdateConfiguration:
                     description: |-
                       RollingUpdateConfiguration configures ServingGroupRollingUpdate.
@@ -228,6 +238,21 @@ spec:
                     enum:
                     - ServingGroupRollingUpdate
                     - RoleRollingUpdate
+                    type: string
+                  updateMethod:
+                    default: Recreate
+                    description: |-
+                      UpdateMethod selects how outdated ServingGroups or Roles are moved to the desired revision.
+                      Supported values are Recreate and InPlace.
+                      It defaults to Recreate, which keeps the behavior of existing ModelServings.
+
+                      InPlace patches container images on existing Pods.
+                      While it is in effect, only regular-container images and the documented scaling and rollout fields may change.
+                      These fields are spec.replicas, Role replicas, rolloutStrategy, Role rolling update settings, recoveryPolicy, revisionHistoryLimit, and template.restartGracePeriodSeconds.
+                      The webhook rejects any other change, and the controller never recreates Pods to apply one.
+                    enum:
+                    - Recreate
+                    - InPlace
                     type: string
                 required:
                 - type

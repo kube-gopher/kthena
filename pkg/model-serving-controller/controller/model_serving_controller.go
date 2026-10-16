@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,6 +57,7 @@ import (
 	listerv1alpha1 "github.com/volcano-sh/kthena/client-go/listers/workload/v1alpha1"
 	workloadv1alpha1 "github.com/volcano-sh/kthena/pkg/apis/workload/v1alpha1"
 	"github.com/volcano-sh/kthena/pkg/model-serving-controller/datastore"
+	"github.com/volcano-sh/kthena/pkg/model-serving-controller/inplace"
 	"github.com/volcano-sh/kthena/pkg/model-serving-controller/plugins"
 	"github.com/volcano-sh/kthena/pkg/model-serving-controller/podgroupmanager"
 	"github.com/volcano-sh/kthena/pkg/model-serving-controller/utils"
@@ -67,6 +69,9 @@ const (
 
 	GroupNameKey = "GroupName"
 	RoleIDKey    = "RoleID"
+
+	// defaultInPlaceRestartGracePeriod is the shortest grace period before a Pod with an unexpected restart is recovered during an in-place update.
+	defaultInPlaceRestartGracePeriod = 2 * time.Minute
 )
 
 // PodGroupManager is the interface for managing PodGroups.
@@ -114,6 +119,10 @@ type ModelServingController struct {
 	initialSync     atomic.Bool // indicates whether the initial sync has been completed
 	pluginsRegistry *plugins.Registry
 	recorder        record.EventRecorder
+
+	inPlaceRestartEvents sync.Map
+	// inPlaceRestartGracePeriod is the shortest grace period before recovery during an in-place update.
+	inPlaceRestartGracePeriod time.Duration
 }
 
 func NewModelServingController(kubeClientSet kubernetes.Interface, modelServingClient clientset.Interface, volcanoClient volcano.Interface, apiextClient apiextClientSet.Interface) (*ModelServingController, error) {
@@ -183,6 +192,8 @@ func NewModelServingController(kubeClientSet kubernetes.Interface, modelServingC
 		store:           store,
 		pluginsRegistry: plugins.DefaultRegistry,
 		recorder:        recorder,
+
+		inPlaceRestartGracePeriod: defaultInPlaceRestartGracePeriod,
 	}
 
 	registerPodGroupHandler := func(pgInformer cache.SharedIndexInformer) {
@@ -357,31 +368,102 @@ func (c *ModelServingController) updatePod(_, newObj interface{}) {
 		return
 	}
 
-	switch {
-	case utils.IsPodRunningAndReady(newPod):
+	if utils.IsPodRunningAndReady(newPod) {
 		klog.V(4).Infof("handleReadyPod: %s/%s", newPod.Namespace, newPod.Name)
 		// The pod is available, that is, the state is running, and the container is ready
 		err = c.handleReadyPod(ms, servingGroupName, newPod)
 		if err != nil {
 			klog.Errorf("handle running pod %s/%s failed for ModelServing %s/%s: %v", newPod.Namespace, newPod.Name, ms.Namespace, ms.Name, err)
 		}
-	case utils.IsPodFailed(newPod) || utils.ContainerRestarted(newPod):
+		return
+	}
+
+	// The restart that applies an in-place image patch is expected and must not trigger recovery.
+	// Any other restart follows the RecoveryPolicy.
+	restartCause := inplace.ClassifyRestart(newPod)
+	switch {
+	case utils.IsPodFailed(newPod) || restartCause == inplace.UnexpectedRestart:
 		klog.V(4).Infof("handleErrorPod: %s/%s", newPod.Namespace, newPod.Name)
+		c.recordInPlaceUpdateRestarts(ms, newPod)
 		err = c.handleErrorPod(ms, servingGroupName, newPod)
 		if err != nil {
 			klog.Errorf("handle error pod %s/%s failed for ModelServing %s/%s: %v", newPod.Namespace, newPod.Name, ms.Namespace, ms.Name, err)
 		}
+	case restartCause == inplace.InPlaceUpdateRestart:
+		klog.V(4).Infof("handleInPlaceUpdateRestart: %s/%s", newPod.Namespace, newPod.Name)
+		err = c.handleInPlaceUpdateRestart(ms, servingGroupName, newPod)
+		if err != nil {
+			klog.Errorf("handle in-place update restart of pod %s/%s failed for ModelServing %s/%s: %v", newPod.Namespace, newPod.Name, ms.Namespace, ms.Name, err)
+		}
 	default:
 		klog.V(4).Infof("handleDefault: %s/%s", newPod.Namespace, newPod.Name)
 		if !c.initialSync.Load() {
-			roleName := utils.GetRoleName(newPod)
-			roleTemplateHash := c.resolveRoleTemplateHash(ms, roleName, newPod)
-			c.store.AddServingGroupAndRole(types.NamespacedName{
-				Namespace: ms.Namespace,
-				Name:      ms.Name,
-			}, servingGroupName, utils.ObjectRevision(newPod), roleTemplateHash, roleName, utils.GetRoleID(newPod))
+			c.addServingGroupAndRoleFromPod(ms, servingGroupName, newPod)
 		}
 	}
+}
+
+func (c *ModelServingController) addServingGroupAndRoleFromPod(ms *workloadv1alpha1.ModelServing, servingGroupName string, pod *corev1.Pod) {
+	roleName := utils.GetRoleName(pod)
+	roleTemplateHash := c.resolveRoleTemplateHash(ms, roleName, pod)
+	c.store.AddServingGroupAndRole(types.NamespacedName{
+		Namespace: ms.Namespace,
+		Name:      ms.Name,
+	}, servingGroupName, utils.ObjectRevision(pod), roleTemplateHash, roleName, utils.GetRoleID(pod))
+}
+
+// handleInPlaceUpdateRestart handles the restart that applies an in-place image patch.
+// It marks the pod unavailable but never deletes it.
+func (c *ModelServingController) handleInPlaceUpdateRestart(ms *workloadv1alpha1.ModelServing, servingGroupName string, pod *corev1.Pod) error {
+	if !c.initialSync.Load() {
+		c.addServingGroupAndRoleFromPod(ms, servingGroupName, pod)
+	}
+	if err := c.markPodUnavailable(ms, servingGroupName, pod); err != nil {
+		return err
+	}
+	c.recordInPlaceUpdateRestarts(ms, pod)
+	c.enqueueModelServing(ms)
+	return nil
+}
+
+// recordInPlaceUpdateRestarts reports the restarts of a pod during an in-place update by cause.
+// Image-change restarts are expected, while other restarts are reported as warnings because they follow the RecoveryPolicy.
+func (c *ModelServingController) recordInPlaceUpdateRestarts(ms *workloadv1alpha1.ModelServing, pod *corev1.Pod) {
+	restarts, ok := inplace.UpdateRestarts(pod)
+	if !ok || c.recorder == nil {
+		return
+	}
+	eventType := corev1.EventTypeNormal
+	var parts []string
+	for _, r := range restarts {
+		if r.ImageChange == 0 && r.Other == 0 {
+			continue
+		}
+		if r.Other > 0 {
+			eventType = corev1.EventTypeWarning
+		}
+		part := fmt.Sprintf("container %s: image-change=%d other=%d", r.Name, r.ImageChange, r.Other)
+		if r.LastTermination != "" {
+			part += fmt.Sprintf(" (last termination: %s)", r.LastTermination)
+		}
+		parts = append(parts, part)
+	}
+	if len(parts) == 0 {
+		return
+	}
+	message := fmt.Sprintf("Pod %s restarted during an in-place update: %s", pod.Name, strings.Join(parts, "; "))
+	// Each update has its own start time, so equal counts in a later update of the same Pod are reported again.
+	reported := reportedInPlaceRestarts{update: inplace.MatchingState(pod).StartedAt.UTC().Format(time.RFC3339Nano), message: message}
+	if last, ok := c.inPlaceRestartEvents.Swap(pod.UID, reported); ok && last == reported {
+		return
+	}
+	c.recorder.Event(ms, eventType, "InPlaceUpdateRestart", message)
+}
+
+// reportedInPlaceRestarts is the last InPlaceUpdateRestart event recorded for a Pod.
+type reportedInPlaceRestarts struct {
+	update  string
+	message string
 }
 
 func (c *ModelServingController) deletePod(obj interface{}) {
@@ -399,6 +481,8 @@ func (c *ModelServingController) deletePod(obj interface{}) {
 			return
 		}
 	}
+
+	c.inPlaceRestartEvents.Delete(pod.UID)
 
 	ms, servingGroupName, roleName, roleID := c.getModelServingAndResourceDetails(pod)
 	// ms is nil means the modelserving is deleted
@@ -1750,7 +1834,8 @@ func (c *ModelServingController) handleReadyPod(ms *workloadv1alpha1.ModelServin
 func (c *ModelServingController) handleErrorPod(ms *workloadv1alpha1.ModelServing, servingGroupName string, errPod *corev1.Pod) error {
 	// None: leave a restarted, still-alive pod to the kubelet (do not delete it),
 	// but mark it unavailable. A terminal PodFailed pod falls through to deletion.
-	if ms.Spec.RecoveryPolicy == workloadv1alpha1.NoneRestartPolicy && utils.ContainerRestarted(errPod) && !utils.IsPodFailed(errPod) {
+	// The caller only passes a pod that is not PodFailed when it has an unexpected restart.
+	if ms.Spec.RecoveryPolicy == workloadv1alpha1.NoneRestartPolicy && !utils.IsPodFailed(errPod) {
 		if err := c.markPodUnavailable(ms, servingGroupName, errPod); err != nil {
 			klog.Warningf("mark pod %s unavailable: %v", errPod.Name, err)
 		}
@@ -1809,10 +1894,22 @@ func (c *ModelServingController) markPodUnavailable(ms *workloadv1alpha1.ModelSe
 	return nil
 }
 
-func (c *ModelServingController) handlePodAfterGraceTime(ms *workloadv1alpha1.ModelServing, errPod *corev1.Pod) {
+// restartGracePeriod returns how long a Pod with an unexpected restart may take to become ready again before it is recovered.
+func (c *ModelServingController) restartGracePeriod(ms *workloadv1alpha1.ModelServing, pod *corev1.Pod) time.Duration {
+	var gracePeriod time.Duration
 	if ms.Spec.Template.RestartGracePeriodSeconds != nil && *ms.Spec.Template.RestartGracePeriodSeconds > 0 {
+		gracePeriod = time.Duration(*ms.Spec.Template.RestartGracePeriodSeconds) * time.Second
+	}
+	if !utils.IsPodFailed(pod) && inplace.InUpdateWindow(pod) {
+		gracePeriod = max(gracePeriod, c.inPlaceRestartGracePeriod)
+	}
+	return gracePeriod
+}
+
+func (c *ModelServingController) handlePodAfterGraceTime(ms *workloadv1alpha1.ModelServing, errPod *corev1.Pod) {
+	if gracePeriod := c.restartGracePeriod(ms, errPod); gracePeriod > 0 {
 		// Wait for the grace period before making a decision
-		time.Sleep(time.Duration(*ms.Spec.Template.RestartGracePeriodSeconds) * time.Second)
+		time.Sleep(gracePeriod)
 		klog.V(4).Infof("%s after grace time", errPod.Name)
 		defer c.graceMap.Delete(getPodGracePeriodKey(errPod))
 

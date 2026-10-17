@@ -76,15 +76,46 @@ func BuildRevisionData(ms *workloadv1alpha1.ModelServing) ([]byte, error) {
 }
 
 func buildRevisionPatch(ms *workloadv1alpha1.ModelServing) (*modelServingRevisionPatch, error) {
+	normalized, err := NormalizeRevisionFields(ms)
+	if err != nil {
+		return nil, err
+	}
+
+	roles := make([]modelServingRevisionRole, len(normalized.Spec.Template.Roles))
+	for i := range normalized.Spec.Template.Roles {
+		role := &normalized.Spec.Template.Roles[i]
+		roles[i] = modelServingRevisionRole{
+			Name:           role.Name,
+			EntryTemplate:  role.EntryTemplate,
+			WorkerReplicas: role.WorkerReplicas,
+			WorkerTemplate: role.WorkerTemplate,
+		}
+	}
+
+	return &modelServingRevisionPatch{
+		Spec: modelServingRevisionSpec{
+			SchedulerName: normalized.Spec.SchedulerName,
+			Plugins:       normalized.Spec.Plugins,
+			Template: modelServingRevisionTemplate{
+				Roles: roles,
+			},
+		},
+	}, nil
+}
+
+// NormalizeRevisionFields returns a copy of ms whose revisioned fields are normalized as in BuildRevisionData.
+// Two ModelServings render the same workloads when their normalized revisioned fields are equal.
+// Roles are sorted by name, so their order is not significant.
+func NormalizeRevisionFields(ms *workloadv1alpha1.ModelServing) (*workloadv1alpha1.ModelServing, error) {
 	normalized := ms.DeepCopy()
 	if normalized.Spec.SchedulerName == "" {
 		normalized.Spec.SchedulerName = defaultSchedulerName
 	}
 
-	plugins := normalized.Spec.Plugins
-	if plugins == nil {
-		plugins = []workloadv1alpha1.PluginSpec{}
+	if normalized.Spec.Plugins == nil {
+		normalized.Spec.Plugins = []workloadv1alpha1.PluginSpec{}
 	}
+	plugins := normalized.Spec.Plugins
 	for i := range plugins {
 		plugin := &plugins[i]
 		if plugin.Type == "" {
@@ -115,31 +146,15 @@ func buildRevisionPatch(ms *workloadv1alpha1.ModelServing) (*modelServingRevisio
 		}
 	}
 
-	roles := make([]modelServingRevisionRole, len(normalized.Spec.Template.Roles))
 	for i := range normalized.Spec.Template.Roles {
 		role := &normalized.Spec.Template.Roles[i]
 		normalizePodTemplate(&role.EntryTemplate, normalized.Spec.SchedulerName)
 		normalizePodTemplate(role.WorkerTemplate, normalized.Spec.SchedulerName)
-		roles[i] = modelServingRevisionRole{
-			Name:           role.Name,
-			EntryTemplate:  role.EntryTemplate,
-			WorkerReplicas: role.WorkerReplicas,
-			WorkerTemplate: role.WorkerTemplate,
-		}
 	}
-	sort.Slice(roles, func(i, j int) bool {
-		return roles[i].Name < roles[j].Name
+	sort.SliceStable(normalized.Spec.Template.Roles, func(i, j int) bool {
+		return normalized.Spec.Template.Roles[i].Name < normalized.Spec.Template.Roles[j].Name
 	})
-
-	return &modelServingRevisionPatch{
-		Spec: modelServingRevisionSpec{
-			SchedulerName: normalized.Spec.SchedulerName,
-			Plugins:       plugins,
-			Template: modelServingRevisionTemplate{
-				Roles: roles,
-			},
-		},
-	}, nil
+	return normalized, nil
 }
 
 // normalizePodTemplate removes only differences that ModelServing itself

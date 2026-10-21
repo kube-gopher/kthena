@@ -9,7 +9,7 @@ permissions: read-all
 
 jobs:
   release-charts:
-    if: github.repository == 'volcano-sh/kthena'
+    if: github.repository == 'kube-gopher/kthena'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
